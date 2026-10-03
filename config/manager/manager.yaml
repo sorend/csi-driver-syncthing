@@ -1,0 +1,344 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: csi-driver-syncthing-controller
+  namespace: kube-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: csi-driver-syncthing-csi-controller
+  namespace: kube-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: csi-driver-syncthing-csi-controller
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: csi-driver-syncthing-csi-controller
+    spec:
+      serviceAccountName: csi-driver-syncthing-controller
+      securityContext:
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+      containers:
+        - name: csi-provisioner
+          image: registry.k8s.io/sig-storage/csi-provisioner:v5.1.0
+          args: ["--csi-address=$(ADDRESS)", "--leader-election=true", "--http-endpoint=:9809"]
+          securityContext:
+            runAsUser: 65532
+            runAsGroup: 65532
+            supplementalGroups: [1000]
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          ports:
+            - name: metrics
+              containerPort: 9809
+          env:
+            - name: ADDRESS
+              value: /csi/csi.sock
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+            - name: csi-provisioner-tmp
+              mountPath: /tmp
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: 9809
+            initialDelaySeconds: 10
+            periodSeconds: 30
+        - name: csi-attacher
+          image: registry.k8s.io/sig-storage/csi-attacher:v4.7.0
+          args: ["--csi-address=$(ADDRESS)", "--leader-election=true", "--timeout=10m", "--http-endpoint=:9810"]
+          securityContext:
+            runAsUser: 65532
+            runAsGroup: 65532
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          env:
+            - name: ADDRESS
+              value: /csi/csi.sock
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+            - name: csi-attacher-tmp
+              mountPath: /tmp
+          ports:
+            - name: metrics
+              containerPort: 9810
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: 9810
+            initialDelaySeconds: 10
+            periodSeconds: 30
+        - name: csi-driver
+          image: csi-driver-syncthing:latest
+          args: ["--leader-elect", "--csi-endpoint=unix:///csi/csi.sock", "--metrics-bind-address=0"]
+          env:
+            - name: CSI_ENDPOINT
+              value: /csi/csi.sock
+          securityContext:
+            runAsUser: 65532
+            runAsGroup: 65532
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+            - name: csi-driver-tmp
+              mountPath: /tmp
+          ports:
+            - name: probes
+              containerPort: 8081
+          startupProbe:
+            httpGet:
+              path: /readyz
+              port: probes
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: probes
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: probes
+      volumes:
+        - name: socket-dir
+          emptyDir: {}
+        - name: csi-provisioner-tmp
+          emptyDir: {}
+        - name: csi-attacher-tmp
+          emptyDir: {}
+        - name: csi-driver-tmp
+          emptyDir: {}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: csi-driver-syncthing-node
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: csi-driver-syncthing-node
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: csi-driver-syncthing-node
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      serviceAccountName: csi-driver-syncthing-node-agent
+      initContainers:
+        - name: prepare-storage
+          image: busybox:1.36
+          command: ["sh", "-c", "mkdir -p /state/config /state/data /volumes/.ownership && chown 1000:1000 /state /state/config /state/data /volumes /volumes/.ownership && chown 65532:65532 /mounts && chmod 2775 /volumes /volumes/.ownership /mounts"]
+          volumeMounts:
+            - name: state
+              mountPath: /state
+            - name: volumes
+              mountPath: /volumes
+            - name: mounts
+              mountPath: /mounts
+      containers:
+        - name: syncthing
+          image: syncthing/syncthing:1.29.2
+          args: ["-home=/var/syncthing/config", "-data=/var/syncthing/data"]
+          env:
+            - name: HOME
+              value: /var/syncthing
+            - name: STGUIADDRESS
+              value: 127.0.0.1:8384
+            - name: STNODEFAULTFOLDER
+              value: "true"
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          ports:
+            - name: sync-tcp
+              containerPort: 22000
+              hostPort: 22000
+              protocol: TCP
+            - name: sync-udp
+              containerPort: 22000
+              hostPort: 22000
+              protocol: UDP
+          startupProbe:
+            httpGet:
+              path: /rest/noauth/health
+              port: 8384
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            httpGet:
+              path: /rest/noauth/health
+              port: 8384
+            periodSeconds: 30
+          volumeMounts:
+            - name: state
+              mountPath: /var/syncthing
+            - name: volumes
+              mountPath: /var/lib/csi-syncthing/volumes
+            - name: mounts
+              mountPath: /var/lib/csi-syncthing/mounts
+            - name: kubelet-root
+              mountPath: /var/lib/kubelet
+              mountPropagation: Bidirectional
+        - name: node-agent
+          image: csi-driver-syncthing:latest
+          command: ["/node-agent"]
+          args: ["--syncthing-config=/var/syncthing/config/config.xml", "--volumes-dir=/var/lib/csi-syncthing/volumes", "--mounts-dir=/var/lib/csi-syncthing/mounts"]
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: MOUNTS_DIR
+              value: /var/lib/csi-syncthing/mounts
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            supplementalGroups: [65532]
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: volumes
+              mountPath: /var/lib/csi-syncthing/volumes
+            - name: state
+              mountPath: /var/syncthing
+              readOnly: true
+            - name: mounts
+              mountPath: /var/lib/csi-syncthing/mounts
+            - name: kubelet-root
+              mountPath: /var/lib/kubelet
+              mountPropagation: HostToContainer
+        - name: csi-node
+          image: csi-driver-syncthing:latest
+          command: ["/csi-node"]
+          args: ["--csi-endpoint=unix:///csi/csi.sock", "--mounts-dir=/var/lib/csi-syncthing/mounts"]
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: VOLUMES_DIR
+              value: /var/lib/csi-syncthing/volumes
+          securityContext:
+            privileged: true
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            capabilities:
+              add: [SYS_ADMIN]
+          volumeMounts:
+            - name: plugin-socket
+              mountPath: /csi
+            - name: volumes
+              mountPath: /var/lib/csi-syncthing/volumes
+            - name: kubelet-pods
+              mountPath: /var/lib/kubelet/pods
+              mountPropagation: Bidirectional
+            - name: kubelet-root
+              mountPath: /var/lib/kubelet
+              mountPropagation: Bidirectional
+            - name: mounts
+              mountPath: /var/lib/csi-syncthing/mounts
+        - name: liveness-probe
+          image: registry.k8s.io/sig-storage/livenessprobe:v2.14.0
+          args: ["--csi-address=/csi/csi.sock", "--probe-timeout=3s"]
+          volumeMounts:
+            - name: plugin-socket
+              mountPath: /csi
+            - name: kubelet-root
+              mountPath: /var/lib/kubelet
+              mountPropagation: HostToContainer
+          livenessProbe:
+            exec:
+              command: ["/csi-livenessprobe", "--csi-address=/csi/csi.sock"]
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 10
+        - name: node-driver-registrar
+          image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.12.0
+          args: ["--csi-address=/csi/csi.sock", "--kubelet-registration-path=/var/lib/kubelet/plugins/csi.syncthing.io/csi.sock"]
+          volumeMounts:
+            - name: plugin-socket
+              mountPath: /csi
+            - name: registration-socket
+              mountPath: /registration
+      volumes:
+        - name: state
+          hostPath:
+            path: /var/lib/csi-syncthing/syncthing
+            type: DirectoryOrCreate
+        - name: volumes
+          hostPath:
+            path: /var/lib/csi-syncthing/volumes
+            type: DirectoryOrCreate
+        - name: mounts
+          hostPath:
+            path: /var/lib/csi-syncthing/mounts
+            type: DirectoryOrCreate
+        - name: plugin-socket
+          hostPath:
+            path: /var/lib/kubelet/plugins/csi.syncthing.io
+            type: DirectoryOrCreate
+        - name: kubelet-pods
+          hostPath:
+            path: /var/lib/kubelet/pods
+            type: Directory
+        - name: kubelet-root
+          hostPath:
+            path: /var/lib/kubelet
+            type: Directory
+        - name: registration-socket
+          hostPath:
+            path: /var/lib/kubelet/plugins_registry
+            type: Directory
+---
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: csi.syncthing.io
+spec:
+  attachRequired: true
+  podInfoOnMount: false
+  fsGroupPolicy: File
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: syncthing
+provisioner: csi.syncthing.io
+parameters:
+  initialSync: wait
+  replicaRetention: 24h
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: false
