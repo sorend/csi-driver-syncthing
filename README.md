@@ -4,21 +4,15 @@
 
 ## Install
 
-Build the image and make it available to all cluster nodes (or push it to a registry and update the image fields under `config/manager/manager.yaml`):
+Install the Helm chart from `config/`:
 
 ```sh
-make docker-build
+helm upgrade --install csi-driver-syncthing ./config \
+  --namespace csi-syncthing \
+  --create-namespace
 ```
 
-Install the operator, permissions, CSI node components, CRDs, and StorageClass:
-
-```sh
-kubectl apply -f config/namespace.yaml
-kubectl apply -f config/crd/bases/
-kubectl apply -f config/rbac/role.yaml
-kubectl apply -f config/rbac/node-agent.yaml
-kubectl apply -f config/manager/manager.yaml
-```
+The chart installs the controller, node components, CRDs, and `syncthing` StorageClass. The driver image defaults to `ghcr.io/sorend/csi-driver-syncthing:latest`; override it with `--set image.repository=... --set image.tag=...` if needed. Chart values are in `config/values.yaml`.
 
 The worker nodes need persistent writable `/var/lib/csi-syncthing` storage, Linux mount propagation, and TCP/UDP port 22000 open between Syncthing peers. The node CSI plugin and mount setup helper require privileged access. The Syncthing GUI listens only on loopback; the node agent reads its API key from Syncthing's local config.
 

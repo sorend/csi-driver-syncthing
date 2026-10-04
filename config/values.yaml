@@ -1,0 +1,9 @@
+image:
+  repository: ghcr.io/sorend/csi-driver-syncthing
+  tag: latest
+  pullPolicy: IfNotPresent
+
+storageClass:
+  name: syncthing
+  initialSync: wait
+  replicaRetention: 24h
