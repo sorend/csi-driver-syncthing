@@ -13,6 +13,7 @@ make docker-build
 Install the operator, permissions, CSI node components, CRDs, and StorageClass:
 
 ```sh
+kubectl apply -f config/namespace.yaml
 kubectl apply -f config/crd/bases/
 kubectl apply -f config/rbac/role.yaml
 kubectl apply -f config/rbac/node-agent.yaml

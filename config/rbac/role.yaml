@@ -27,4 +27,4 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: csi-driver-syncthing-controller
-    namespace: kube-system
+    namespace: csi-syncthing
