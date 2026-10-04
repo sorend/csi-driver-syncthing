@@ -4,11 +4,19 @@
 
 ## Install
 
-Build the image and make it available to all cluster nodes (or push it to a registry and update the image fields under `config/manager/manager.yaml`):
+Publish the multi-platform image to GHCR and create an image pull secret for the private package before applying the manifests:
 
 ```sh
-make docker-build
+kubectl apply -f config/namespace.yaml
+make docker-push IMAGE=ghcr.io/sorend/csi-driver-syncthing:latest
+kubectl create secret docker-registry ghcr-pull \
+  --namespace=csi-syncthing \
+  --docker-server=ghcr.io \
+  --docker-username="$(gh api user --jq .login)" \
+  --docker-password="$(gh auth token)"
 ```
+
+Create the `csi-syncthing` namespace before creating the secret. Use a GitHub token with `read:packages` access. The node DaemonSet and controller deployment use this secret to pull the private image.
 
 Install the operator, permissions, CSI node components, CRDs, and StorageClass:
 

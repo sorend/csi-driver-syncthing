@@ -31,9 +31,6 @@ func Serve(ctx context.Context, endpoint string, register func(*grpc.Server)) er
 	if err := os.MkdirAll(filepath.Dir(socket), 0750); err != nil {
 		return fmt.Errorf("create CSI socket directory: %w", err)
 	}
-	if err := os.Chmod(filepath.Dir(socket), 0770); err != nil {
-		return fmt.Errorf("set CSI socket directory permissions: %w", err)
-	}
 	if err := os.Remove(socket); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove stale CSI socket: %w", err)
 	}
