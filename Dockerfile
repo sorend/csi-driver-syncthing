@@ -1,11 +1,13 @@
-FROM golang:1.23 AS build
+FROM --platform=$BUILDPLATFORM golang:1.23 AS build
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -o /out/manager ./cmd/manager \
-    && CGO_ENABLED=0 go build -o /out/csi-node ./cmd/csi-node \
-    && CGO_ENABLED=0 go build -o /out/node-agent ./cmd/node-agent
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o /out/manager ./cmd/manager \
+    && CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o /out/csi-node ./cmd/csi-node \
+    && CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o /out/node-agent ./cmd/node-agent
 
 FROM gcr.io/distroless/static:nonroot AS manager
 COPY --from=build /out/manager /manager
