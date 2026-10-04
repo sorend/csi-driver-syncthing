@@ -2,13 +2,13 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: csi-driver-syncthing-controller
-  namespace: csi-syncthing
+  namespace: {{ .Release.Namespace }}
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: csi-driver-syncthing-csi-controller
-  namespace: csi-syncthing
+  namespace: {{ .Release.Namespace }}
 spec:
   replicas: 1
   selector:
@@ -82,7 +82,8 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 30
         - name: csi-driver
-          image: csi-driver-syncthing:latest
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           args: ["--leader-elect", "--csi-endpoint=unix:///csi/csi.sock", "--metrics-bind-address=0"]
           env:
             - name: CSI_ENDPOINT
@@ -131,7 +132,7 @@ apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: csi-driver-syncthing-node
-  namespace: csi-syncthing
+  namespace: {{ .Release.Namespace }}
 spec:
   selector:
     matchLabels:
@@ -205,7 +206,8 @@ spec:
               mountPath: /var/lib/kubelet
               mountPropagation: Bidirectional
         - name: node-agent
-          image: csi-driver-syncthing:latest
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["/node-agent"]
           args: ["--syncthing-config=/var/syncthing/config/config.xml", "--volumes-dir=/var/lib/csi-syncthing/volumes", "--mounts-dir=/var/lib/csi-syncthing/mounts"]
           env:
@@ -240,7 +242,8 @@ spec:
               mountPath: /var/lib/kubelet
               mountPropagation: HostToContainer
         - name: csi-node
-          image: csi-driver-syncthing:latest
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["/csi-node"]
           args: ["--csi-endpoint=unix:///csi/csi.sock", "--mounts-dir=/var/lib/csi-syncthing/mounts"]
           env:
@@ -334,11 +337,11 @@ spec:
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
-  name: syncthing
+  name: {{ .Values.storageClass.name }}
 provisioner: csi.syncthing.io
 parameters:
-  initialSync: wait
-  replicaRetention: 24h
+  initialSync: {{ .Values.storageClass.initialSync | quote }}
+  replicaRetention: {{ .Values.storageClass.replicaRetention | quote }}
 reclaimPolicy: Delete
 volumeBindingMode: WaitForFirstConsumer
 allowVolumeExpansion: false
