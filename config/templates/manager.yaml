@@ -23,6 +23,7 @@ spec:
       securityContext:
         fsGroup: 65532
         fsGroupChangePolicy: OnRootMismatch
+        supplementalGroups: [1000]
       containers:
         - name: csi-provisioner
           image: registry.k8s.io/sig-storage/csi-provisioner:v5.1.0
@@ -30,7 +31,6 @@ spec:
           securityContext:
             runAsUser: 65532
             runAsGroup: 65532
-            supplementalGroups: [1000]
             runAsNonRoot: true
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -145,6 +145,8 @@ spec:
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
       serviceAccountName: csi-driver-syncthing-node-agent
+      securityContext:
+        supplementalGroups: [65532]
       initContainers:
         - name: prepare-storage
           image: busybox:1.36
@@ -159,10 +161,12 @@ spec:
       containers:
         - name: syncthing
           image: syncthing/syncthing:1.29.2
-          args: ["-home=/var/syncthing/config", "-data=/var/syncthing/data"]
+          args: ["--config=/var/syncthing/config", "--data=/var/syncthing/data"]
           env:
             - name: HOME
               value: /var/syncthing
+            - name: STHOMEDIR
+              value: ""
             - name: STGUIADDRESS
               value: 127.0.0.1:8384
             - name: STNODEFAULTFOLDER
@@ -185,6 +189,7 @@ spec:
               protocol: UDP
           startupProbe:
             httpGet:
+              host: 127.0.0.1
               path: /rest/noauth/health
               port: 8384
             initialDelaySeconds: 5
@@ -192,6 +197,7 @@ spec:
             failureThreshold: 60
           livenessProbe:
             httpGet:
+              host: 127.0.0.1
               path: /rest/noauth/health
               port: 8384
             periodSeconds: 30
@@ -204,7 +210,7 @@ spec:
               mountPath: /var/lib/csi-syncthing/mounts
             - name: kubelet-root
               mountPath: /var/lib/kubelet
-              mountPropagation: Bidirectional
+              mountPropagation: HostToContainer
         - name: node-agent
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
@@ -224,7 +230,6 @@ spec:
           securityContext:
             runAsUser: 1000
             runAsGroup: 1000
-            supplementalGroups: [65532]
             runAsNonRoot: true
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -256,7 +261,6 @@ spec:
           securityContext:
             privileged: true
             runAsUser: 0
-            allowPrivilegeEscalation: false
             capabilities:
               add: [SYS_ADMIN]
           volumeMounts:
@@ -274,7 +278,7 @@ spec:
               mountPath: /var/lib/csi-syncthing/mounts
         - name: liveness-probe
           image: registry.k8s.io/sig-storage/livenessprobe:v2.14.0
-          args: ["--csi-address=/csi/csi.sock", "--probe-timeout=3s"]
+          args: ["--csi-address=/csi/csi.sock", "--probe-timeout=3s", "--http-endpoint=:9811"]
           volumeMounts:
             - name: plugin-socket
               mountPath: /csi
@@ -282,8 +286,9 @@ spec:
               mountPath: /var/lib/kubelet
               mountPropagation: HostToContainer
           livenessProbe:
-            exec:
-              command: ["/csi-livenessprobe", "--csi-address=/csi/csi.sock"]
+            httpGet:
+              path: /healthz
+              port: 9811
             initialDelaySeconds: 10
             periodSeconds: 30
             timeoutSeconds: 10
