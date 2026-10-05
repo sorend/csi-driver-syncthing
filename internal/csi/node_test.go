@@ -2,6 +2,8 @@ package csi
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"testing"
@@ -112,6 +114,18 @@ func TestValidateTargetVolume(t *testing.T) {
 }
 
 func TestValidateStagingVolume(t *testing.T) {
+	volumeID := "pvc-1"
+	volumeHash := sha256.Sum256([]byte(volumeID))
+	stagingPath := filepath.Join("/var/lib/kubelet/plugins/kubernetes.io/csi", DriverName, hex.EncodeToString(volumeHash[:]), "globalmount")
+	if err := validateStagingVolume(stagingPath, volumeID); err != nil {
+		t.Fatalf("valid driver-specific kubelet staging path rejected: %v", err)
+	}
+	if err := validateStagingVolume(stagingPath, "pvc-2"); err == nil {
+		t.Fatal("driver-specific staging path for a different volume accepted")
+	}
+	if err := validateStagingVolume(filepath.Join("/var/lib/kubelet/plugins/kubernetes.io/csi", DriverName, "not-a-volume-hash", "globalmount"), volumeID); err == nil {
+		t.Fatal("driver-specific staging path with invalid volume hash accepted")
+	}
 	if err := validateStagingVolume("/var/lib/kubelet/plugins/kubernetes.io/csi/pv/pvc-1234/globalmount", "pvc-1-suffix"); err != nil {
 		t.Fatalf("valid kubelet staging path with PV name differing from volume ID rejected: %v", err)
 	}

@@ -392,6 +392,18 @@ func validateStagingVolume(path, volumeID string) error {
 		return err
 	}
 	cleanPath := filepath.Clean(path)
+	driverStageRoot := filepath.Join("/var/lib/kubelet/plugins/kubernetes.io/csi", DriverName)
+	if hasPathPrefix(cleanPath, driverStageRoot) {
+		relative := strings.TrimPrefix(strings.TrimPrefix(cleanPath, driverStageRoot), string(os.PathSeparator))
+		parts := strings.Split(relative, string(os.PathSeparator))
+		if len(parts) == 0 || parts[0] != "pv" {
+			expectedVolumeHash := sha256.Sum256([]byte(volumeID))
+			if len(parts) == 2 && parts[0] == hex.EncodeToString(expectedVolumeHash[:]) && parts[1] == "globalmount" {
+				return nil
+			}
+			return fmt.Errorf("path is not a kubelet CSI staging target for this volume")
+		}
+	}
 	stageRoots := []string{
 		"/var/lib/kubelet/plugins/kubernetes.io/csi/pv",
 		filepath.Join("/var/lib/kubelet/plugins/kubernetes.io/csi", DriverName, "pv"),
