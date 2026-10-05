@@ -1,10 +1,60 @@
 package csi
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"google.golang.org/grpc"
 )
+
+func TestServeDoesNotChangeSocketDirectoryPermissions(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Chmod(root, 0751); err != nil {
+		t.Fatal(err)
+	}
+	socket := filepath.Join(root, "csi.sock")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- Serve(ctx, "unix://"+socket, func(*grpc.Server) {})
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		if _, err := os.Stat(socket); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			t.Fatal("Serve did not create the CSI socket")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	info, err := os.Stat(root)
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0751 {
+		cancel()
+		t.Fatalf("socket directory permissions = %#o, want %#o", got, 0751)
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Serve returned an error after cancellation: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Serve did not stop after cancellation")
+	}
+}
 
 func TestValidateNodePath(t *testing.T) {
 	for _, test := range []struct {
