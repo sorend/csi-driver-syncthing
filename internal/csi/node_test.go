@@ -47,14 +47,32 @@ func TestValidateMountFlagsRejectsDangerousFlags(t *testing.T) {
 }
 
 func TestValidateTargetVolume(t *testing.T) {
-	if err := validateTargetVolume("/var/lib/kubelet/pods/pod/volumes/kubernetes.io~csi/pvc-1/mount", "pvc-1"); err != nil {
-		t.Fatalf("valid kubelet CSI target rejected: %v", err)
+	if err := validateTargetVolume("/var/lib/kubelet/pods/pod/volumes/kubernetes.io~csi/pvc-1234/mount", "pvc-1-suffix"); err != nil {
+		t.Fatalf("valid kubelet CSI target with PV name differing from volume ID rejected: %v", err)
 	}
-	if err := validateTargetVolume("/var/lib/kubelet/plugins/csi.syncthing.io/stage/pvc-1/staging_target", "pvc-1"); err != nil {
-		t.Fatalf("valid stage path rejected: %v", err)
+	if err := validateTargetVolume("/var/lib/kubelet/pods/pod/volumes/kubernetes.io~csi/pvc-1234/mount", "pvc-1"); err != nil {
+		t.Fatalf("valid target rejected when PV name differs from volume ID: %v", err)
 	}
-	if err := validateTargetVolume("/var/lib/kubelet/pods/pod/volumes/kubernetes.io~csi/pvc-2/mount", "pvc-1"); err == nil {
-		t.Fatal("target for another volume accepted")
+	if err := validateTargetVolume("/var/lib/kubelet/pods/pod/volumes/other/pvc-1/mount", "pvc-1"); err == nil {
+		t.Fatal("non-CSI kubelet target accepted")
+	}
+	if err := validateTargetVolume("/var/lib/kubelet/plugins/kubernetes.io/csi/csi.syncthing.io/pvc-1/globalmount", "pvc-1"); err == nil {
+		t.Fatal("staging path accepted as a pod target")
+	}
+}
+
+func TestValidateStagingVolume(t *testing.T) {
+	if err := validateStagingVolume("/var/lib/kubelet/plugins/kubernetes.io/csi/pv/pvc-1234/globalmount", "pvc-1-suffix"); err != nil {
+		t.Fatalf("valid kubelet staging path with PV name differing from volume ID rejected: %v", err)
+	}
+	if err := validateStagingVolume("/var/lib/kubelet/plugins/kubernetes.io/csi/pv/pvc-1/globalmount", "pvc-1"); err != nil {
+		t.Fatalf("valid kubelet staging path rejected: %v", err)
+	}
+	if err := validateStagingVolume("/var/lib/kubelet/plugins/kubernetes.io/csi/pv/pvc-1/not-globalmount", "pvc-1"); err == nil {
+		t.Fatal("invalid kubelet staging target accepted")
+	}
+	if err := validateStagingVolume("/var/lib/kubelet/plugins/kubernetes.io/csi/pv/pvc-1/nested/globalmount", "pvc-1"); err == nil {
+		t.Fatal("nested staging target accepted")
 	}
 }
 

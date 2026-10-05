@@ -4,29 +4,15 @@
 
 ## Install
 
-Publish the multi-platform image to GHCR and create an image pull secret for the private package before applying the manifests:
+Install the Helm chart from `config/`:
 
 ```sh
-kubectl apply -f config/namespace.yaml
-make docker-push IMAGE=ghcr.io/sorend/csi-driver-syncthing:latest
-kubectl create secret docker-registry ghcr-pull \
-  --namespace=csi-syncthing \
-  --docker-server=ghcr.io \
-  --docker-username="$(gh api user --jq .login)" \
-  --docker-password="$(gh auth token)"
+helm upgrade --install csi-driver-syncthing ./config \
+  --namespace csi-syncthing \
+  --create-namespace
 ```
 
-Create the `csi-syncthing` namespace before creating the secret. Use a GitHub token with `read:packages` access. The node DaemonSet and controller deployment use this secret to pull the private image.
-
-Install the operator, permissions, CSI node components, CRDs, and StorageClass:
-
-```sh
-kubectl apply -f config/namespace.yaml
-kubectl apply -f config/crd/bases/
-kubectl apply -f config/rbac/role.yaml
-kubectl apply -f config/rbac/node-agent.yaml
-kubectl apply -f config/manager/manager.yaml
-```
+The chart installs the controller, node components, CRDs, and `syncthing` StorageClass. The driver image defaults to `ghcr.io/sorend/csi-driver-syncthing:latest`; override it with `--set image.repository=... --set image.tag=...` if needed. Chart values are in `config/values.yaml`.
 
 The worker nodes need persistent writable `/var/lib/csi-syncthing` storage, Linux mount propagation, and TCP/UDP port 22000 open between Syncthing peers. The node CSI plugin and mount setup helper require privileged access. The Syncthing GUI listens only on loopback; the node agent reads its API key from Syncthing's local config.
 
@@ -81,3 +67,7 @@ kubectl get syncthingvolumes
 ```
 
 Syncthing maintains a separate local copy on each participating node. Changes replicate asynchronously; writes are not synchronously durable on other nodes. `ReadWriteMany`, block volumes, snapshots, expansion, and external backup integration are not supported.
+
+## Example
+
+See [`example/`](example/) for a cross-node PVC example that writes data on one node and reads the replicated data from another.

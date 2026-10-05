@@ -1,0 +1,6 @@
+apiVersion: v2
+name: csi-driver-syncthing
+description: CSI driver and Syncthing node components for replicated Kubernetes volumes
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

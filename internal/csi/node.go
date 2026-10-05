@@ -50,9 +50,6 @@ func (s *Node) NodeStageVolume(_ context.Context, req *csi.NodeStageVolumeReques
 	if err := validateStagingVolume(req.GetStagingTargetPath(), req.GetVolumeId()); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid staging path for volume: %v", err)
 	}
-	if err := validateStagingVolume(req.GetStagingTargetPath(), req.GetVolumeId()); err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid staging path for volume: %v", err)
-	}
 	if mounted, err := isMountPoint(req.GetStagingTargetPath()); err != nil {
 		return nil, status.Errorf(codes.Internal, "inspect staging path: %v", err)
 	} else if mounted {
@@ -376,23 +373,31 @@ func validateNodePath(path string) error {
 
 func validateTargetVolume(path, volumeID string) error {
 	path = filepath.Clean(path)
-	isPodTarget := strings.Contains(path, "/volumes/kubernetes.io~csi/")
-	isStagePath := strings.Contains(path, "/plugins/kubernetes.io/csi/csi.syncthing.io/") || strings.Contains(path, "/plugins/csi.syncthing.io/")
-	if !isPodTarget && !isStagePath {
-		return fmt.Errorf("path is not under the Syncthing CSI plugin directory")
+	if err := validateVolumeID(volumeID); err != nil {
+		return err
 	}
-	if !strings.Contains(path, "/"+volumeID+"/") {
-		return fmt.Errorf("path does not contain the requested volume ID")
+	podRoot := "/var/lib/kubelet/pods/"
+	if !strings.HasPrefix(path, podRoot) {
+		return fmt.Errorf("path is not under the kubelet pod directory")
+	}
+	parts := strings.Split(strings.TrimPrefix(path, podRoot), string(os.PathSeparator))
+	if len(parts) != 5 || parts[0] == "" || parts[1] != "volumes" || parts[2] != "kubernetes.io~csi" || parts[3] == "" || parts[4] != "mount" {
+		return fmt.Errorf("path is not a kubelet CSI pod volume target")
 	}
 	return nil
 }
 
 func validateStagingVolume(path, volumeID string) error {
-	if !strings.HasPrefix(filepath.Clean(path), "/var/lib/kubelet/plugins/kubernetes.io/csi/csi.syncthing.io/") {
+	if err := validateVolumeID(volumeID); err != nil {
+		return err
+	}
+	stageRoot := "/var/lib/kubelet/plugins/kubernetes.io/csi/pv"
+	if !strings.HasPrefix(filepath.Clean(path), stageRoot+string(os.PathSeparator)) {
 		return fmt.Errorf("path is outside the CSI staging directory")
 	}
-	if !strings.Contains(path, "/"+volumeID+"/") {
-		return fmt.Errorf("path does not contain the volume ID")
+	parts := strings.Split(strings.TrimPrefix(filepath.Clean(path), stageRoot+string(os.PathSeparator)), string(os.PathSeparator))
+	if len(parts) != 2 || parts[0] == "" || parts[0] == "." || parts[0] == ".." || parts[1] != "globalmount" {
+		return fmt.Errorf("path is not a kubelet CSI staging target")
 	}
 	return nil
 }
