@@ -118,11 +118,17 @@ func TestValidateStagingVolume(t *testing.T) {
 	if err := validateStagingVolume("/var/lib/kubelet/plugins/kubernetes.io/csi/pv/pvc-1/globalmount", "pvc-1"); err != nil {
 		t.Fatalf("valid kubelet staging path rejected: %v", err)
 	}
+	if err := validateStagingVolume("/var/lib/kubelet/plugins/kubernetes.io/csi/csi.syncthing.io/pv/pvc-1/globalmount", "pvc-1"); err != nil {
+		t.Fatalf("valid driver-scoped kubelet staging path rejected: %v", err)
+	}
 	if err := validateStagingVolume("/var/lib/kubelet/plugins/kubernetes.io/csi/pv/pvc-1/not-globalmount", "pvc-1"); err == nil {
 		t.Fatal("invalid kubelet staging target accepted")
 	}
 	if err := validateStagingVolume("/var/lib/kubelet/plugins/kubernetes.io/csi/pv/pvc-1/nested/globalmount", "pvc-1"); err == nil {
 		t.Fatal("nested staging target accepted")
+	}
+	if err := validateStagingVolume("/var/lib/kubelet/plugins/kubernetes.io/csi/other.csi.io/pv/pvc-1/globalmount", "pvc-1"); err == nil {
+		t.Fatal("staging target for a different CSI driver accepted")
 	}
 }
 

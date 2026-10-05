@@ -391,15 +391,23 @@ func validateStagingVolume(path, volumeID string) error {
 	if err := validateVolumeID(volumeID); err != nil {
 		return err
 	}
-	stageRoot := "/var/lib/kubelet/plugins/kubernetes.io/csi/pv"
-	if !strings.HasPrefix(filepath.Clean(path), stageRoot+string(os.PathSeparator)) {
-		return fmt.Errorf("path is outside the CSI staging directory")
+	cleanPath := filepath.Clean(path)
+	stageRoots := []string{
+		"/var/lib/kubelet/plugins/kubernetes.io/csi/pv",
+		filepath.Join("/var/lib/kubelet/plugins/kubernetes.io/csi", DriverName, "pv"),
 	}
-	parts := strings.Split(strings.TrimPrefix(filepath.Clean(path), stageRoot+string(os.PathSeparator)), string(os.PathSeparator))
-	if len(parts) != 2 || parts[0] == "" || parts[0] == "." || parts[0] == ".." || parts[1] != "globalmount" {
+	for _, root := range stageRoots {
+		if !hasPathPrefix(cleanPath, root) {
+			continue
+		}
+		relative := strings.TrimPrefix(strings.TrimPrefix(cleanPath, root), string(os.PathSeparator))
+		parts := strings.Split(relative, string(os.PathSeparator))
+		if len(parts) == 2 && parts[0] != "" && parts[0] != "." && parts[0] != ".." && parts[1] == "globalmount" {
+			return nil
+		}
 		return fmt.Errorf("path is not a kubelet CSI staging target")
 	}
-	return nil
+	return fmt.Errorf("path is outside the CSI staging directory")
 }
 
 func validateMountFlags(flags []string) error {
