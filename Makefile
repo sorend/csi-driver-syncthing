@@ -1,7 +1,10 @@
 IMAGE ?= csi-driver-syncthing:latest
 PLATFORMS ?= linux/amd64,linux/arm64
+HELM_RELEASE ?= csi-driver-syncthing
+HELM_NAMESPACE ?= csi-syncthing
+HELM_CHART ?= ./config
 
-.PHONY: deps fmt test docker-build docker-push
+.PHONY: deps fmt test docker-build docker-push helm-upgrade-install
 
 deps:
 	go mod tidy
@@ -17,3 +20,6 @@ docker-build:
 
 docker-push:
 	docker buildx build --platform $(PLATFORMS) --push --target manager -t $(IMAGE) .
+
+helm-upgrade-install:
+	helm upgrade --install $(HELM_RELEASE) $(HELM_CHART) --namespace $(HELM_NAMESPACE) --create-namespace
