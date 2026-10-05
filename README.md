@@ -67,3 +67,7 @@ kubectl get syncthingvolumes
 ```
 
 Syncthing maintains a separate local copy on each participating node. Changes replicate asynchronously; writes are not synchronously durable on other nodes. `ReadWriteMany`, block volumes, snapshots, expansion, and external backup integration are not supported.
+
+## Example
+
+See [`example/`](example/) for a cross-node PVC example that writes data on one node and reads the replicated data from another.

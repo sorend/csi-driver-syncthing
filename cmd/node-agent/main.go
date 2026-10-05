@@ -31,14 +31,22 @@ func main() {
 	if value := os.Getenv("MOUNTS_DIR"); value != "" {
 		mountsDir = value
 	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if *nodeName == "" || *nodeIP == "" {
+		panic("NODE_NAME and NODE_IP are required")
+	}
 	if *apiKey == "" {
 		var err error
-		*apiKey, err = readAPIKey(*configPath)
+		*apiKey, err = waitForAPIKey(ctx, *configPath)
 		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			panic(err)
 		}
 	}
-	if *nodeName == "" || *nodeIP == "" || *apiKey == "" {
+	if *apiKey == "" {
 		panic("NODE_NAME, NODE_IP, and Syncthing API key are required")
 	}
 	scheme := runtime.NewScheme()
@@ -57,10 +65,24 @@ func main() {
 		Syncthing: &agent.Syncthing{BaseURL: *apiURL, APIKey: *apiKey},
 		NodeName:  *nodeName, NodeIP: *nodeIP, VolumesDir: *volumesDir, MountsDir: mountsDir, Interval: 10 * time.Second,
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	if err := runner.Run(ctx); err != nil {
 		panic(err)
+	}
+}
+
+func waitForAPIKey(ctx context.Context, path string) (string, error) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		apiKey, err := readAPIKey(path)
+		if err == nil {
+			return apiKey, nil
+		}
+		select {
+		case <-ctx.Done():
+			return "", fmt.Errorf("wait for Syncthing API key: %w (last error: %v)", ctx.Err(), err)
+		case <-ticker.C:
+		}
 	}
 }
 
