@@ -12,7 +12,6 @@ import (
 	"syscall"
 
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
-	"golang.org/x/sys/unix"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -261,11 +260,7 @@ func mountIfNeeded(source, target string, readOnly bool) error {
 		}
 		return nil
 	}
-	if err := syscall.Mount(source, target, "", syscall.MS_BIND, ""); err != nil {
-		return err
-	}
-	if err := unix.Mount("", target, "", syscall.MS_BIND|syscall.MS_REC, ""); err != nil {
-		_ = syscall.Unmount(target, 0)
+	if err := syscall.Mount(source, target, "", syscall.MS_BIND|syscall.MS_REC, ""); err != nil {
 		return err
 	}
 	if readOnly {
