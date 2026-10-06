@@ -81,3 +81,5 @@ make csi-sanity
 ```
 
 Details and cleanup instructions are in [`integration-tests/csi-sanity/`](integration-tests/csi-sanity/). Use `make csi-sanity-clean` to delete the local cluster.
+
+The separate **CSI sanity** GitHub Actions workflow runs this suite on pushes and pull requests.
