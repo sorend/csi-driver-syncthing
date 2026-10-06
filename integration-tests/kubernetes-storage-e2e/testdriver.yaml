@@ -1,0 +1,7 @@
+StorageClass:
+  FromExistingClassName: syncthing-e2e
+DriverInfo:
+  Name: csi.syncthing.io
+  Capabilities:
+    persistence: true
+    singleNodeVolume: true

@@ -1,0 +1,46 @@
+name: Kubernetes storage e2e
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+    branches:
+      - "**"
+
+permissions:
+  contents: read
+
+jobs:
+  kubernetes-storage-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Install Kind
+        uses: helm/kind-action@v1.12.0
+        with:
+          install_only: true
+
+      - name: Run Kubernetes storage e2e
+        run: make kubernetes-storage-e2e
+
+      - name: Upload e2e reports and cluster diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kubernetes-storage-e2e-focused-artifacts
+          path: artifacts/kubernetes-storage-e2e/
+          if-no-files-found: ignore
+
+      - name: Delete Kind cluster
+        if: always()
+        run: make kubernetes-storage-e2e-clean

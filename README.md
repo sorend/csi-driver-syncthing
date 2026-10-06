@@ -83,3 +83,17 @@ make csi-sanity
 Details and cleanup instructions are in [`integration-tests/csi-sanity/`](integration-tests/csi-sanity/). Use `make csi-sanity-clean` to delete the local cluster.
 
 The separate **CSI sanity** GitHub Actions workflow runs this suite on pushes and pull requests.
+
+## Test Kubernetes storage behavior
+
+Run the upstream Kubernetes external CSI storage tests on a local three-node Kind cluster (requires Docker, Kind, kubectl, Helm, curl, and tar):
+
+```sh
+make kubernetes-storage-e2e
+```
+
+The workflow pins Kubernetes test and Kind node images to `v1.34.0`, installs the chart and a test StorageClass with `initialSync: none`, and runs the upstream `volumes should store data` test for `csi.syncthing.io`, skipping optional-feature and disruptive cases. Reports are written to `artifacts/kubernetes-storage-e2e/`. Use `make kubernetes-storage-e2e-clean` to delete the cluster. `KUBERNETES_VERSION`, `KIND_NODE_IMAGE`, and `KUBERNETES_STORAGE_E2E_CLUSTER_NAME` can be overridden for local runs.
+
+The **Kubernetes storage e2e** GitHub Actions workflow runs this suite on pushes and pull requests and uploads reports and failure diagnostics.
+
+The separate **Kubernetes storage e2e full suite** workflow selects all upstream external storage tests for this driver, excluding feature-tagged and disruptive tests. Run it locally with `make kubernetes-storage-e2e-full`; its reports are written to `artifacts/kubernetes-storage-e2e-full/`. The full-suite CI workflow also supports manual runs through GitHub Actions.
