@@ -17,12 +17,14 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 type Controller struct {
 	csi.UnimplementedControllerServer
 	Client client.Client
+	Reader client.Reader
 	Poll   time.Duration
 }
 
@@ -154,8 +156,13 @@ func (s *Controller) DeleteVolume(ctx context.Context, req *csi.DeleteVolumeRequ
 		return nil, status.Error(codes.Aborted, "volume is being deleted; waiting for its finalizer")
 	}
 	if len(volume.Spec.DesiredReplicas) > 0 {
-		volume.Spec.DesiredReplicas = nil
-		if err := s.Client.Update(ctx, volume); err != nil {
+		if _, err := s.updateVolume(ctx, req.GetVolumeId(), func(current *storagev1alpha1.SyncthingVolume) (bool, error) {
+			if len(current.Spec.DesiredReplicas) == 0 {
+				return false, nil
+			}
+			current.Spec.DesiredReplicas = nil
+			return true, nil
+		}); err != nil {
 			return nil, status.Errorf(codes.Aborted, "detach replicas before deletion: %v", err)
 		}
 		return nil, status.Error(codes.Aborted, "waiting for attached replicas to be detached")
@@ -243,15 +250,22 @@ func (s *Controller) ControllerPublishVolume(ctx context.Context, req *csi.Contr
 	if req.GetVolumeCapability().GetAccessMode().GetMode() != csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER {
 		return nil, status.Error(codes.InvalidArgument, "only single-node writer volumes are supported")
 	}
-	for _, replica := range volume.Spec.DesiredReplicas {
-		if replica.NodeName != req.GetNodeId() && replica.Mode == "active" {
-			return nil, status.Errorf(codes.Aborted, "volume is already attached to node %q", replica.NodeName)
+	_, err = s.updateVolume(ctx, req.GetVolumeId(), func(current *storagev1alpha1.SyncthingVolume) (bool, error) {
+		if !current.DeletionTimestamp.IsZero() {
+			return false, status.Error(codes.Aborted, "volume is being deleted")
 		}
-	}
-	if setReplicaMode(volume, req.GetNodeId(), "active") {
-		if err := s.Client.Update(ctx, volume); err != nil {
-			return nil, status.Errorf(codes.Aborted, "update SyncthingVolume replicas: %v", err)
+		for _, replica := range current.Spec.DesiredReplicas {
+			if replica.NodeName != req.GetNodeId() && replica.Mode == "active" {
+				return false, status.Errorf(codes.Aborted, "volume is already attached to node %q", replica.NodeName)
+			}
 		}
+		return setReplicaMode(current, req.GetNodeId(), "active"), nil
+	})
+	if err != nil {
+		if _, ok := status.FromError(err); ok {
+			return nil, err
+		}
+		return nil, status.Errorf(codes.Aborted, "update SyncthingVolume replicas: %v", err)
 	}
 	for {
 		current, err := s.getVolume(ctx, req.GetVolumeId())
@@ -306,14 +320,27 @@ func (s *Controller) ControllerUnpublishVolume(ctx context.Context, req *csi.Con
 		return nil, status.Errorf(codes.Internal, "get SyncthingVolume: %v", err)
 	}
 	if !volume.DeletionTimestamp.IsZero() {
-		for i := range volume.Spec.DesiredReplicas {
-			if volume.Spec.DesiredReplicas[i].NodeName == req.GetNodeId() {
-				volume.Spec.DesiredReplicas = append(volume.Spec.DesiredReplicas[:i], volume.Spec.DesiredReplicas[i+1:]...)
-				if err := s.Client.Update(ctx, volume); err != nil {
-					return nil, status.Errorf(codes.Aborted, "remove deleting volume replica: %v", err)
-				}
-				return nil, status.Error(codes.Aborted, "waiting for deleting volume replica removal")
+		changed, err := s.updateVolume(ctx, req.GetVolumeId(), func(current *storagev1alpha1.SyncthingVolume) (bool, error) {
+			if current.DeletionTimestamp.IsZero() {
+				return false, nil
 			}
+			for i := range current.Spec.DesiredReplicas {
+				if current.Spec.DesiredReplicas[i].NodeName == req.GetNodeId() {
+					current.Spec.DesiredReplicas = append(current.Spec.DesiredReplicas[:i], current.Spec.DesiredReplicas[i+1:]...)
+					return true, nil
+				}
+			}
+			return false, nil
+		})
+		if err != nil {
+			return nil, status.Errorf(codes.Aborted, "remove deleting volume replica: %v", err)
+		}
+		if changed {
+			return nil, status.Error(codes.Aborted, "waiting for deleting volume replica removal")
+		}
+		volume, err = s.getVolume(ctx, req.GetVolumeId())
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "read deleting volume: %v", err)
 		}
 		for _, replica := range volume.Status.Replicas {
 			if replica.NodeName == req.GetNodeId() && replica.State != "Absent" {
@@ -322,10 +349,13 @@ func (s *Controller) ControllerUnpublishVolume(ctx context.Context, req *csi.Con
 		}
 		return &csi.ControllerUnpublishVolumeResponse{}, nil
 	}
-	if setReplicaMode(volume, req.GetNodeId(), "cache") {
-		if err := s.Client.Update(ctx, volume); err != nil {
-			return nil, status.Errorf(codes.Aborted, "cache SyncthingVolume replica: %v", err)
+	if _, err := s.updateVolume(ctx, req.GetVolumeId(), func(current *storagev1alpha1.SyncthingVolume) (bool, error) {
+		if !current.DeletionTimestamp.IsZero() {
+			return false, status.Error(codes.Aborted, "volume is being deleted")
 		}
+		return setReplicaMode(current, req.GetNodeId(), "cache"), nil
+	}); err != nil {
+		return nil, status.Errorf(codes.Aborted, "cache SyncthingVolume replica: %v", err)
 	}
 	return &csi.ControllerUnpublishVolumeResponse{}, nil
 }
@@ -352,6 +382,9 @@ func (s *Controller) ValidateVolumeCapabilities(ctx context.Context, req *csi.Va
 		return nil, status.Error(codes.Aborted, "volume is being deleted")
 	}
 	if err := validateCapabilities(req.GetVolumeCapabilities()); err != nil {
+		if len(req.GetVolumeCapabilities()) == 0 {
+			return nil, err
+		}
 		return &csi.ValidateVolumeCapabilitiesResponse{Message: status.Convert(err).Message()}, nil
 	}
 	for _, key := range []string{"backupClass", "backupPolicy"} {
@@ -371,8 +404,38 @@ func (s *Controller) getVolume(ctx context.Context, handle string) (*storagev1al
 		return nil, fmt.Errorf("volume ID is required")
 	}
 	volume := &storagev1alpha1.SyncthingVolume{}
-	err := s.Client.Get(ctx, types.NamespacedName{Name: handle}, volume)
+	reader := s.Reader
+	if reader == nil {
+		reader = s.Client
+	}
+	err := reader.Get(ctx, types.NamespacedName{Name: handle}, volume)
 	return volume, err
+}
+
+func (s *Controller) updateVolume(ctx context.Context, name string, mutate func(*storagev1alpha1.SyncthingVolume) (bool, error)) (bool, error) {
+	changed := false
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		volume := &storagev1alpha1.SyncthingVolume{}
+		reader := s.Reader
+		if reader == nil {
+			reader = s.Client
+		}
+		err := reader.Get(ctx, types.NamespacedName{Name: name}, volume)
+		if err != nil {
+			return err
+		}
+		base := volume.DeepCopy()
+		changed, err = mutate(volume)
+		if err != nil || !changed {
+			return err
+		}
+		patch := client.MergeFrom(base)
+		if err := s.Client.Patch(ctx, volume, patch); err != nil {
+			return err
+		}
+		return nil
+	})
+	return changed, err
 }
 
 func validateCapabilities(capabilities []*csi.VolumeCapability) error {

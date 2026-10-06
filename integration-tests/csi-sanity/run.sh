@@ -23,6 +23,7 @@ helm upgrade --install csi-driver-syncthing "$ROOT_DIR/config" \
   --set csiSanity.enabled=true \
   --set csiSanity.controllerSocketDir=/var/lib/kubelet/plugins/csi.syncthing.io-controller
 
+kubectl rollout restart daemonset/csi-driver-syncthing-node deployment/csi-driver-syncthing-csi-controller -n csi-syncthing
 kubectl rollout status daemonset/csi-driver-syncthing-node -n csi-syncthing --timeout=3m
 kubectl rollout status deployment/csi-driver-syncthing-csi-controller -n csi-syncthing --timeout=3m
 kubectl delete pod csi-sanity -n csi-syncthing --ignore-not-found

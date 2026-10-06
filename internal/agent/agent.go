@@ -508,9 +508,16 @@ func (a *Agent) reconcileVolume(ctx context.Context, localID string, volume *sto
 	if err := a.Syncthing.SetFolderPause(ctx, volume.Spec.FolderID, paused); err != nil {
 		return fmt.Errorf("set Syncthing folder pause policy: %w", err)
 	}
-	completion, err := a.Syncthing.Completion(ctx, volume.Spec.FolderID)
-	if err != nil {
-		return fmt.Errorf("read Syncthing completion: %w", err)
+	if paused {
+		return a.publishReplica(ctx, volume, storagev1alpha1.ReplicaStatus{NodeName: a.NodeName, State: "Ready", Completion: 100})
+	}
+	completion := Completion{}
+	if volume.Spec.InitialSync.Policy == "wait" {
+		var err error
+		completion, err = a.Syncthing.Completion(ctx, volume.Spec.FolderID)
+		if err != nil {
+			return fmt.Errorf("read Syncthing completion: %w", err)
+		}
 	}
 	if volume.Spec.InitialSync.Policy == "wait" && completion.NeedBytes == 0 && completion.NeedItems == 0 {
 		if err := a.Syncthing.SetFolderPause(ctx, volume.Spec.FolderID, false); err != nil {

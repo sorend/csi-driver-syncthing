@@ -2,6 +2,7 @@ package csi
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -9,9 +10,12 @@ import (
 	storagev1alpha1 "github.com/sorend/csi-driver-syncthing/api/v1alpha1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
@@ -107,6 +111,121 @@ func TestControllerPublishRequiresReadyNodeAndAddsReplica(t *testing.T) {
 	}
 	if len(got.Spec.DesiredReplicas) != 1 || got.Spec.DesiredReplicas[0].NodeName != "worker-a" {
 		t.Fatalf("desired replicas = %v", got.Spec.DesiredReplicas)
+	}
+}
+
+func TestControllerPublishUpdatesOnlyVolumeSpec(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := storagev1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	volume := &storagev1alpha1.SyncthingVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "volume", Generation: 2},
+		Spec: storagev1alpha1.SyncthingVolumeSpec{
+			VolumeHandle: "volume", FolderID: "volume",
+			InitialSync: storagev1alpha1.InitialSyncPolicy{Policy: "none"},
+		},
+		Status: storagev1alpha1.SyncthingVolumeStatus{ObservedGeneration: 1},
+	}
+	node := &storagev1alpha1.SyncthingNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "worker-a"},
+		Spec: storagev1alpha1.SyncthingNodeSpec{
+			NodeName: "worker-a", DeviceID: "device-a", Addresses: []string{"tcp://192.0.2.1:22000"},
+		},
+		Status: storagev1alpha1.SyncthingNodeStatus{
+			Ready: true, ObservedDeviceID: "device-a", LastSeen: &metav1.Time{Time: time.Now()},
+		},
+	}
+	client := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(volume, node).WithObjects(volume, node).Build()
+	controller := &Controller{Client: client, Reader: client, Poll: time.Millisecond}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, err := controller.ControllerPublishVolume(ctx, &csi.ControllerPublishVolumeRequest{
+		VolumeId: "volume", NodeId: "worker-a",
+		VolumeCapability: &csi.VolumeCapability{
+			AccessType: &csi.VolumeCapability_Mount{Mount: &csi.VolumeCapability_MountVolume{}},
+			AccessMode: &csi.VolumeCapability_AccessMode{Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER},
+		},
+	})
+	if status.Code(err) != codes.DeadlineExceeded {
+		t.Fatalf("ControllerPublishVolume error = %v, want deadline waiting for agent status", err)
+	}
+	got := &storagev1alpha1.SyncthingVolume{}
+	if err := client.Get(context.Background(), types.NamespacedName{Name: "volume"}, got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.ObservedGeneration != 1 {
+		t.Fatalf("observed generation = %d, controller spec patch overwrote status", got.Status.ObservedGeneration)
+	}
+	if len(got.Spec.DesiredReplicas) != 1 || got.Spec.DesiredReplicas[0].Mode != "active" {
+		t.Fatalf("desired replicas = %v, want worker-a active", got.Spec.DesiredReplicas)
+	}
+}
+
+type conflictOnceClient struct {
+	client.Client
+	conflict bool
+}
+
+func (c *conflictOnceClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+	if !c.conflict {
+		c.conflict = true
+		volume := &storagev1alpha1.SyncthingVolume{}
+		if err := c.Client.Get(ctx, types.NamespacedName{Name: obj.GetName()}, volume); err != nil {
+			return err
+		}
+		volume.Status.Replicas = []storagev1alpha1.ReplicaStatus{{NodeName: "worker-a", State: "Ready"}}
+		if err := c.Client.Status().Update(ctx, volume); err != nil {
+			return err
+		}
+		c.conflict = true
+		return apierrors.NewConflict(schema.GroupResource{Resource: "syncthingvolumes"}, obj.GetName(), errors.New("simulated concurrent update"))
+	}
+	return c.Client.Patch(ctx, obj, patch, opts...)
+}
+
+func TestUpdateVolumeRetriesConflictWithoutOverwritingStatus(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := storagev1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	volume := &storagev1alpha1.SyncthingVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "volume"},
+		Spec:       storagev1alpha1.SyncthingVolumeSpec{VolumeHandle: "volume", FolderID: "volume"},
+	}
+	baseClient := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(volume).WithObjects(volume).Build()
+	controller := &Controller{Client: &conflictOnceClient{Client: baseClient}}
+	changed, err := controller.updateVolume(context.Background(), "volume", func(current *storagev1alpha1.SyncthingVolume) (bool, error) {
+		return setReplicaMode(current, "worker-a", "active"), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("updateVolume reported no change")
+	}
+	got := &storagev1alpha1.SyncthingVolume{}
+	if err := baseClient.Get(context.Background(), types.NamespacedName{Name: "volume"}, got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Spec.DesiredReplicas) != 1 || got.Spec.DesiredReplicas[0].Mode != "active" {
+		t.Fatalf("desired replicas = %v, want worker-a active", got.Spec.DesiredReplicas)
+	}
+	if len(got.Status.Replicas) != 1 || got.Status.Replicas[0].State != "Ready" {
+		t.Fatalf("status replicas = %v, concurrent status update was lost", got.Status.Replicas)
+	}
+}
+
+func TestValidateVolumeCapabilitiesRejectsEmptyCapabilities(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := storagev1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	volume := &storagev1alpha1.SyncthingVolume{ObjectMeta: metav1.ObjectMeta{Name: "volume"}}
+	controller := &Controller{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(volume).Build()}
+	_, err := controller.ValidateVolumeCapabilities(context.Background(), &csi.ValidateVolumeCapabilitiesRequest{VolumeId: "volume"})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("ValidateVolumeCapabilities error = %v, want InvalidArgument", err)
 	}
 }
 
