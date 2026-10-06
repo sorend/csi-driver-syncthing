@@ -20,6 +20,18 @@ spec:
         app.kubernetes.io/name: csi-driver-syncthing-csi-controller
     spec:
       serviceAccountName: csi-driver-syncthing-controller
+      {{- if .Values.csiSanity.enabled }}
+      nodeSelector: {csi-sanity: "true"}
+      initContainers:
+        - name: prepare-controller-socket
+          image: busybox:1.36
+          command: ["sh", "-c", "mkdir -p /csi && chown 65532:65532 /csi && chmod 0770 /csi"]
+          securityContext:
+            runAsUser: 0
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+      {{- end }}
       securityContext:
         fsGroup: 65532
         fsGroupChangePolicy: OnRootMismatch
@@ -42,7 +54,7 @@ spec:
               containerPort: 9809
           env:
             - name: ADDRESS
-              value: /csi/csi.sock
+              value: /csi/{{ if .Values.csiSanity.enabled }}controller.sock{{ else }}csi.sock{{ end }}
           volumeMounts:
             - name: socket-dir
               mountPath: /csi
@@ -68,7 +80,7 @@ spec:
               drop: [ALL]
           env:
             - name: ADDRESS
-              value: /csi/csi.sock
+              value: /csi/{{ if .Values.csiSanity.enabled }}controller.sock{{ else }}csi.sock{{ end }}
           volumeMounts:
             - name: socket-dir
               mountPath: /csi
@@ -86,10 +98,10 @@ spec:
         - name: csi-driver
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          args: ["--leader-elect", "--csi-endpoint=unix:///csi/csi.sock", "--metrics-bind-address=0"]
+          args: ["--leader-elect", "--csi-endpoint=unix:///csi/{{ if .Values.csiSanity.enabled }}controller.sock{{ else }}csi.sock{{ end }}", "--metrics-bind-address=0"]
           env:
             - name: CSI_ENDPOINT
-              value: /csi/csi.sock
+              value: /csi/{{ if .Values.csiSanity.enabled }}controller.sock{{ else }}csi.sock{{ end }}
           securityContext:
             runAsUser: 65532
             runAsGroup: 65532
@@ -122,7 +134,13 @@ spec:
               port: probes
       volumes:
         - name: socket-dir
+          {{- if .Values.csiSanity.enabled }}
+          hostPath:
+            path: {{ .Values.csiSanity.controllerSocketDir }}
+            type: DirectoryOrCreate
+          {{- else }}
           emptyDir: {}
+          {{- end }}
         - name: csi-provisioner-tmp
           emptyDir: {}
         - name: csi-attacher-tmp
@@ -144,6 +162,9 @@ spec:
       labels:
         app.kubernetes.io/name: csi-driver-syncthing-node
     spec:
+      {{- if .Values.csiSanity.enabled }}
+      nodeSelector: {csi-sanity: "true"}
+      {{- end }}
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
       serviceAccountName: csi-driver-syncthing-node-agent

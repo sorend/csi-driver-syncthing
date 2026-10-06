@@ -3,8 +3,9 @@ PLATFORMS ?= linux/amd64,linux/arm64
 HELM_RELEASE ?= csi-driver-syncthing
 HELM_NAMESPACE ?= csi-syncthing
 HELM_CHART ?= ./config
+KIND_CLUSTER_NAME ?= csi-sanity
 
-.PHONY: deps fmt test docker-build docker-push helm-upgrade-install
+.PHONY: deps fmt test docker-build docker-push helm-upgrade-install csi-sanity csi-sanity-clean
 
 deps:
 	go mod tidy
@@ -23,3 +24,9 @@ docker-push:
 
 helm-upgrade-install:
 	helm upgrade --install $(HELM_RELEASE) $(HELM_CHART) --namespace $(HELM_NAMESPACE) --create-namespace
+
+csi-sanity:
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) bash ./integration-tests/csi-sanity/run.sh
+
+csi-sanity-clean:
+	kind delete cluster --name $(KIND_CLUSTER_NAME)

@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: csi-sanity
+  namespace: csi-syncthing
+spec:
+  restartPolicy: Never
+  nodeSelector:
+    csi-sanity: "true"
+  containers:
+    - name: csi-sanity
+      image: csi-sanity:v5.6.0
+      imagePullPolicy: IfNotPresent
+      command: ["sh", "-c"]
+      args:
+        - >-
+          mkdir -p "/var/lib/kubelet/pods/${POD_UID}/volumes/kubernetes.io~csi"
+          /var/lib/kubelet/plugins/kubernetes.io/csi/pv/csi-sanity &&
+          exec csi-sanity
+          -csi.endpoint=unix:///var/lib/kubelet/plugins/csi.syncthing.io/csi.sock
+          -csi.controllerendpoint=unix:///var/lib/kubelet/plugins/csi.syncthing.io-controller/controller.sock
+          -csi.mountdir="/var/lib/kubelet/pods/${POD_UID}/volumes/kubernetes.io~csi/sanity"
+          -csi.stagingdir=/var/lib/kubelet/plugins/kubernetes.io/csi/pv/csi-sanity/globalmount
+      securityContext:
+        privileged: true
+      env:
+        - name: POD_UID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.uid
+      volumeMounts:
+        - name: kubelet
+          mountPath: /var/lib/kubelet
+          mountPropagation: Bidirectional
+  volumes:
+    - name: kubelet
+      hostPath:
+        path: /var/lib/kubelet
+        type: Directory

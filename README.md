@@ -71,3 +71,13 @@ Syncthing maintains a separate local copy on each participating node. Changes re
 ## Example
 
 See [`example/`](example/) for a cross-node PVC example that writes data on one node and reads the replicated data from another.
+
+## Test with csi-sanity
+
+Run the csi-sanity integration suite on a local Kind cluster (requires Docker, Kind, kubectl, and Helm):
+
+```sh
+make csi-sanity
+```
+
+Details and cleanup instructions are in [`integration-tests/csi-sanity/`](integration-tests/csi-sanity/). Use `make csi-sanity-clean` to delete the local cluster.

@@ -376,7 +376,7 @@ func validateTargetVolume(path, volumeID string) error {
 		return fmt.Errorf("path is not under the kubelet pod directory")
 	}
 	parts := strings.Split(strings.TrimPrefix(path, podRoot), string(os.PathSeparator))
-	if len(parts) != 5 || parts[0] == "" || parts[1] != "volumes" || parts[2] != "kubernetes.io~csi" || parts[3] == "" || parts[4] != "mount" {
+	if len(parts) != 5 || parts[0] == "" || parts[1] != "volumes" || parts[2] != "kubernetes.io~csi" || parts[3] == "" || (parts[4] != "mount" && parts[4] != "target") {
 		return fmt.Errorf("path is not a kubelet CSI pod volume target")
 	}
 	return nil

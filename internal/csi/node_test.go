@@ -105,6 +105,9 @@ func TestValidateTargetVolume(t *testing.T) {
 	if err := validateTargetVolume("/var/lib/kubelet/pods/pod/volumes/kubernetes.io~csi/pvc-1234/mount", "pvc-1"); err != nil {
 		t.Fatalf("valid target rejected when PV name differs from volume ID: %v", err)
 	}
+	if err := validateTargetVolume("/var/lib/kubelet/pods/csi-sanity/volumes/kubernetes.io~csi/sanity/target", "sanity"); err != nil {
+		t.Fatalf("valid csi-sanity target rejected: %v", err)
+	}
 	if err := validateTargetVolume("/var/lib/kubelet/pods/pod/volumes/other/pvc-1/mount", "pvc-1"); err == nil {
 		t.Fatal("non-CSI kubelet target accepted")
 	}
