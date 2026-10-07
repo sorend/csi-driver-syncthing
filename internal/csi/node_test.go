@@ -58,6 +58,89 @@ func TestServeDoesNotChangeSocketDirectoryPermissions(t *testing.T) {
 	}
 }
 
+func TestServeKeepsSocketOfReplacementServer(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "csi.sock")
+	endpoint := "unix://" + socket
+
+	cancelFirst, first, firstServing := serveAsync(t, endpoint)
+	waitForServe(t, firstServing, first)
+	firstInfo, err := os.Lstat(socket)
+	if err != nil {
+		cancelFirst()
+		t.Fatal(err)
+	}
+
+	// A replacement server binds the same path before the first one is
+	// terminated, exactly as a rolling restart of the controller does.
+	cancelSecond, second, secondServing := serveAsync(t, endpoint)
+	waitForServe(t, secondServing, second)
+	secondInfo, err := os.Lstat(socket)
+	if err != nil {
+		cancelFirst()
+		cancelSecond()
+		t.Fatal(err)
+	}
+	if os.SameFile(firstInfo, secondInfo) {
+		cancelFirst()
+		cancelSecond()
+		t.Fatal("replacement server did not take over the socket path")
+	}
+
+	cancelFirst()
+	waitForServeStop(t, first)
+	current, err := os.Lstat(socket)
+	if err != nil {
+		cancelSecond()
+		t.Fatalf("socket of the replacement server removed by the stopped server: %v", err)
+	}
+	if !os.SameFile(secondInfo, current) {
+		cancelSecond()
+		t.Fatal("socket of the replacement server was replaced on shutdown")
+	}
+
+	cancelSecond()
+	waitForServeStop(t, second)
+	if _, err := os.Lstat(socket); !os.IsNotExist(err) {
+		t.Fatalf("socket of the last server left behind: %v", err)
+	}
+}
+
+// serveAsync runs Serve in the background and reports through serving once the
+// socket is bound and through done once Serve returned.
+func serveAsync(t *testing.T, endpoint string) (context.CancelFunc, <-chan error, <-chan struct{}) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	serving := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- Serve(ctx, endpoint, func(*grpc.Server) { close(serving) })
+	}()
+	return cancel, done, serving
+}
+
+func waitForServe(t *testing.T, serving <-chan struct{}, done <-chan error) {
+	t.Helper()
+	select {
+	case <-serving:
+	case err := <-done:
+		t.Fatalf("Serve returned before binding the socket: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("Serve did not bind the socket")
+	}
+}
+
+func waitForServeStop(t *testing.T, done <-chan error) {
+	t.Helper()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Serve returned an error after cancellation: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Serve did not stop after cancellation")
+	}
+}
+
 func TestValidateNodePath(t *testing.T) {
 	for _, test := range []struct {
 		path string
