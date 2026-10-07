@@ -14,13 +14,13 @@ spec:
       command: ["sh", "-c"]
       args:
         - |
-          mkdir -p "/var/lib/kubelet/pods/${POD_UID}/volumes/kubernetes.io~csi" \
-            /var/lib/kubelet/plugins/kubernetes.io/csi/pv/csi-sanity \
+          mkdir -p "/var/lib/kubelet/pods/${POD_UID}/volumes/kubernetes.io~csi/csi-sanity" \
+            /var/lib/kubelet/plugins/kubernetes.io/csi/pv \
             /var/lib/kubelet/plugins/csi.syncthing.io-controller &&
           exec csi-sanity \
             -csi.endpoint=unix:///var/lib/kubelet/plugins/csi.syncthing.io/csi.sock \
             -csi.controllerendpoint=unix:///var/lib/kubelet/plugins/csi.syncthing.io-controller/controller.sock \
-            -csi.mountdir="/var/lib/kubelet/pods/${POD_UID}/volumes/kubernetes.io~csi" \
+            -csi.mountdir="/var/lib/kubelet/pods/${POD_UID}/volumes/kubernetes.io~csi/csi-sanity" \
             -csi.createmountpathcmd=/usr/local/bin/create-mount-path.sh \
             -csi.removemountpathcmd=/usr/local/bin/remove-mount-path.sh \
             -csi.stagingdir=/var/lib/kubelet/plugins/kubernetes.io/csi/pv/csi-sanity/globalmount \
