@@ -26,6 +26,8 @@ type Controller struct {
 	Client client.Client
 	Reader client.Reader
 	Poll   time.Duration
+	// DeleteTimeout bounds the wait for asynchronous replica teardown.
+	DeleteTimeout time.Duration
 }
 
 func (s *Controller) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
@@ -155,6 +157,13 @@ func (s *Controller) DeleteVolume(ctx context.Context, req *csi.DeleteVolumeRequ
 	if !volume.DeletionTimestamp.IsZero() {
 		return nil, status.Error(codes.Aborted, "volume is being deleted; waiting for its finalizer")
 	}
+	// Clearing the desired replicas is what detaches the volume. The deletion is
+	// completed asynchronously: the node agents observe the empty desired set,
+	// remove their local folder and data, and publish an Absent replica status.
+	// The volume-protection finalizer keeps the object alive until every replica
+	// is gone, so waiting for the object to disappear covers the whole teardown.
+	// Returning early with Aborted would force callers such as the CSI sanity
+	// suite, which call DeleteVolume exactly once, to fail.
 	if len(volume.Spec.DesiredReplicas) > 0 {
 		if _, err := s.updateVolume(ctx, req.GetVolumeId(), func(current *storagev1alpha1.SyncthingVolume) (bool, error) {
 			if len(current.Spec.DesiredReplicas) == 0 {
@@ -165,26 +174,34 @@ func (s *Controller) DeleteVolume(ctx context.Context, req *csi.DeleteVolumeRequ
 		}); err != nil {
 			return nil, status.Errorf(codes.Aborted, "detach replicas before deletion: %v", err)
 		}
-		return nil, status.Error(codes.Aborted, "waiting for attached replicas to be detached")
-	}
-	for _, replica := range volume.Status.Replicas {
-		if replica.State != "Absent" && replica.State != "Cached" {
-			return nil, status.Error(codes.Aborted, "waiting for local replicas to be removed")
-		}
 	}
 	if err := s.Client.Delete(ctx, volume); err != nil && !apierrors.IsNotFound(err) {
 		return nil, status.Errorf(codes.Internal, "delete SyncthingVolume: %v", err)
 	}
+	ctx, cancel := context.WithTimeout(ctx, s.deleteTimeout())
+	defer cancel()
 	for {
 		if err := s.Client.Get(ctx, types.NamespacedName{Name: volume.Name}, &storagev1alpha1.SyncthingVolume{}); apierrors.IsNotFound(err) {
 			return &csi.DeleteVolumeResponse{}, nil
 		} else if err != nil {
+			if ctx.Err() != nil {
+				return nil, status.Errorf(codes.Aborted, "waiting for SyncthingVolume %q deletion: %v", volume.Name, ctx.Err())
+			}
 			return nil, status.Errorf(codes.Internal, "wait for SyncthingVolume deletion: %v", err)
 		}
 		if err := wait(ctx, s.Poll); err != nil {
-			return nil, status.FromContextError(err).Err()
+			return nil, status.Errorf(codes.Aborted, "waiting for SyncthingVolume %q deletion: %v", volume.Name, err)
 		}
 	}
+}
+
+// deleteTimeout bounds how long DeleteVolume waits for the asynchronous replica
+// teardown to finish. It must exceed a couple of node agent reconcile intervals.
+func (s *Controller) deleteTimeout() time.Duration {
+	if s.DeleteTimeout > 0 {
+		return s.DeleteTimeout
+	}
+	return 2 * time.Minute
 }
 
 func (s *Controller) ControllerPublishVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {

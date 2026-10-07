@@ -68,7 +68,7 @@ func main() {
 	signalContext := ctrl.SetupSignalHandler()
 	go func() {
 		if err := csiserver.Serve(signalContext, controllerEndpoint, func(server *grpc.Server) {
-			csiapi.RegisterControllerServer(server, &csiserver.Controller{Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Poll: 2 * time.Second})
+			csiapi.RegisterControllerServer(server, &csiserver.Controller{Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Poll: 2 * time.Second, DeleteTimeout: 2 * time.Minute})
 		}); err != nil {
 			if signalContext.Err() != nil {
 				return

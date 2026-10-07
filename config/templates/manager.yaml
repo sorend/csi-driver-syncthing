@@ -87,7 +87,7 @@ spec:
             - name: csi-attacher-tmp
               mountPath: /tmp
           ports:
-            - name: metrics
+            - name: attach-metrics
               containerPort: 9810
           livenessProbe:
             httpGet:
