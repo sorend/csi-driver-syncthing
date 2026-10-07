@@ -53,7 +53,11 @@ func (s *Node) NodeStageVolume(_ context.Context, req *csi.NodeStageVolumeReques
 		return nil, status.Errorf(codes.Internal, "inspect staging path: %v", err)
 	} else if mounted {
 		expectedSource := filepath.Join(s.VolumesDir, req.GetVolumeId())
-		if mountSource(req.GetStagingTargetPath()) != expectedSource && !hasPathPrefix(mountSource(req.GetStagingTargetPath()), expectedSource) {
+		same, err := sameMountedDir(req.GetStagingTargetPath(), expectedSource)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "inspect staging source: %v", err)
+		}
+		if !same {
 			return nil, status.Error(codes.AlreadyExists, "staging path is mounted from a different volume")
 		}
 		return &csi.NodeStageVolumeResponse{}, nil
@@ -151,9 +155,11 @@ func (s *Node) NodePublishVolume(_ context.Context, req *csi.NodePublishVolumeRe
 	if mounted, err := isMountPoint(req.GetTargetPath()); err != nil {
 		return nil, status.Errorf(codes.Internal, "inspect publish target: %v", err)
 	} else if mounted {
-		source := mountSource(req.GetTargetPath())
-		stagingSource := mountSource(req.GetStagingTargetPath())
-		if source == "" || stagingSource == "" || source != stagingSource {
+		same, err := sameMountedDir(req.GetTargetPath(), req.GetStagingTargetPath())
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "inspect publish source: %v", err)
+		}
+		if !same {
 			return nil, status.Error(codes.AlreadyExists, "publish target is mounted from a different source")
 		}
 		marker, err := s.mountMarker(req.GetVolumeId(), req.GetTargetPath())
@@ -297,48 +303,27 @@ func isMountPoint(target string) (bool, error) {
 	return false, nil
 }
 
-func mountSource(target string) string {
-	content, err := os.ReadFile("/proc/self/mountinfo")
+// sameMountedDir reports whether target is a mount of source. A bind mount
+// shares the device and inode of the directory it was created from, so
+// os.SameFile identifies the origin reliably. The mount source column of
+// /proc/self/mountinfo cannot be used for this: it names the backing
+// filesystem ("/dev/mapper/root" and friends), not the bind origin.
+func sameMountedDir(target, source string) (bool, error) {
+	targetInfo, err := os.Stat(target)
 	if err != nil {
-		return ""
+		return false, err
 	}
-	for _, line := range strings.Split(string(content), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 10 || unescapeMountInfo(fields[4]) != target {
-			continue
-		}
-		for i := 6; i+2 < len(fields); i++ {
-			if fields[i] == "-" {
-				return fields[i+2]
-			}
-		}
+	sourceInfo, err := os.Stat(source)
+	if err != nil {
+		return false, err
 	}
-	return ""
+	return os.SameFile(targetInfo, sourceInfo), nil
 }
 
 func hasPathPrefix(path, root string) bool {
 	path = filepath.Clean(path)
 	root = filepath.Clean(root)
 	return path == root || strings.HasPrefix(path, root+string(os.PathSeparator))
-}
-
-func mountedFrom(target, source string) bool {
-	content, err := os.ReadFile("/proc/self/mountinfo")
-	if err != nil {
-		return false
-	}
-	for _, line := range strings.Split(string(content), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 10 || unescapeMountInfo(fields[4]) != target {
-			continue
-		}
-		for i := 6; i < len(fields)-2; i++ {
-			if fields[i] == "-" && i+2 < len(fields) {
-				return fields[i+2] == source
-			}
-		}
-	}
-	return false
 }
 
 func unescapeMountInfo(path string) string {

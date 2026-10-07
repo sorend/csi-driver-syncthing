@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -229,6 +230,75 @@ func TestValidateStagingVolume(t *testing.T) {
 	}
 	if err := validateStagingVolume("/var/lib/kubelet/plugins/kubernetes.io/csi/other.csi.io/pv/pvc-1/globalmount", "pvc-1"); err == nil {
 		t.Fatal("staging target for a different CSI driver accepted")
+	}
+}
+
+func TestSameMountedDir(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "volume-a")
+	other := filepath.Join(root, "volume-b")
+	target := filepath.Join(root, "target")
+	for _, dir := range []string{source, other, target} {
+		if err := os.Mkdir(dir, 0750); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	same, err := sameMountedDir(source, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !same {
+		t.Fatal("a directory is not recognised as being mounted from itself")
+	}
+
+	same, err = sameMountedDir(target, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if same {
+		t.Fatal("an unrelated directory is reported as mounted from the source")
+	}
+
+	if _, err := sameMountedDir(target, filepath.Join(root, "missing")); err == nil {
+		t.Fatal("missing source did not produce an error")
+	}
+	if _, err := sameMountedDir(filepath.Join(root, "missing"), source); err == nil {
+		t.Fatal("missing target did not produce an error")
+	}
+}
+
+// TestSameMountedDirWithBindMount pins the property sameMountedDir depends on:
+// a bind mount shares st_dev and st_ino with its origin. It skips when the
+// process cannot mount, so it stays a no-op in unprivileged CI runs.
+func TestSameMountedDirWithBindMount(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "volume-a")
+	decoy := filepath.Join(root, "volume-b")
+	target := filepath.Join(root, "target")
+	for _, dir := range []string{source, decoy, target} {
+		if err := os.Mkdir(dir, 0750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := syscall.Mount(source, target, "", syscall.MS_BIND, ""); err != nil {
+		t.Skipf("bind mount unavailable: %v", err)
+	}
+	t.Cleanup(func() { _ = syscall.Unmount(target, 0) })
+
+	same, err := sameMountedDir(target, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !same {
+		t.Fatal("bind mount not recognised as mounted from its origin")
+	}
+	same, err = sameMountedDir(target, decoy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if same {
+		t.Fatal("bind mount reported as mounted from an unrelated directory")
 	}
 }
 
