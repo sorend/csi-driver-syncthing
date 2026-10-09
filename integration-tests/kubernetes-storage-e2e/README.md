@@ -8,15 +8,23 @@ make kubernetes-storage-e2e
 
 The runner downloads the `e2e.test` binary from the pinned Kubernetes test release (`v1.34.0`), creates a Kind cluster with one control-plane and two worker nodes, builds and loads the driver image, installs the Helm chart and CRDs, and waits for the driver pods to become ready. The test driver definition points upstream tests at the pre-installed `syncthing-e2e` StorageClass, which uses `initialSync: none` so single-node volume lifecycle tests do not wait for a replication peer.
 
-The run focuses on the upstream `volumes should store data` test for `csi.syncthing.io`, which checks dynamic provisioning, mounting, writes, and data persistence across pod recreation. Other tests are not selected because the upstream suite includes cases that this driver's current cleanup behavior does not support. Feature-tagged or disruptive tests are skipped as well. Reports are written to `artifacts/kubernetes-storage-e2e/` (ignored by git). On test failure the script also saves Kubernetes objects, pod logs, events, and exported Kind logs there.
+The run selects every upstream test the driver can serve: the `Dynamic PV (default fs)` and `Dynamic PV (filesystem volmode)` test patterns for `csi.syncthing.io`, covering provisioning, mounting, `subPath`, `multiVolume`, `volumeMode`, `volumeIO` and data persistence. Feature-tagged and disruptive tests are skipped.
 
-Run all upstream external storage tests selected for this driver with:
+Three filters keep the selection honest rather than merely green:
+
+* `testdriver.yaml` declares only the capabilities the driver implements, so upstream skips the tests for features it lacks instead of failing them. Absent capabilities cover raw block, cloning (`pvcDataSource`), snapshots, volume expansion, `ReadWriteOncePod`, `RWX`, `volumeLimits` and topology.
+* The focus regex ends at the closing bracket of `[Testpattern: ...]` so the `(allowExpansion)` variants, which the driver cannot serve, are not matched.
+* `should provision storage with any volume data source` is skipped explicitly. It requires a CSI driver with inline ephemeral volume support and is the one selected spec upstream leaves unguarded, so no capability can switch it off. It is also labelled `[Serial]`, which means a failure would abort every remaining spec.
+
+Reports are written to `artifacts/kubernetes-storage-e2e-full/` (ignored by git). On test failure the script also saves Kubernetes objects, pod logs, events, and exported Kind logs there.
+
+Run only the single `volumes should store data` lifecycle test with:
 
 ```sh
-make kubernetes-storage-e2e-full
+make kubernetes-storage-e2e-focused
 ```
 
-The full suite uses the same cluster and test-driver setup, selects all `External.Storage` tests for `csi.syncthing.io`, and skips feature-tagged and disruptive tests. Reports and diagnostics use the separate `artifacts/kubernetes-storage-e2e-full/` directory. The corresponding GitHub Actions workflow runs on pushes and pull requests, can also be started manually, and allows up to six hours.
+That is a quick smoke test of provisioning, mounting, writes and data persistence across pod recreation. It uses the same cluster and test-driver setup and writes to `artifacts/kubernetes-storage-e2e/`. `make kubernetes-storage-e2e-full` remains as an alias for the default target. The corresponding GitHub Actions workflow runs on pushes and pull requests, can also be started manually, and allows up to six hours.
 
 Requires Docker, Kind, kubectl, Helm, curl, and tar. The runner creates the cluster if it does not already exist. Delete it with:
 

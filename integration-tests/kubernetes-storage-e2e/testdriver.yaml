@@ -2,6 +2,20 @@ StorageClass:
   FromExistingClassName: syncthing-e2e
 DriverInfo:
   Name: csi.syncthing.io
+  # Only capabilities the driver actually implements. Anything left out makes
+  # the upstream suite skip the matching tests instead of failing them.
+  #   persistence    data survives pod and node restarts
+  #   fsGroup        kubelet applies the pod fsGroup to the bind mount
+  #   exec           files in the volume are directly executable
+  #   singleNodeVolume the driver needs no topology, so any node can serve it
+  #
+  # Deliberately absent, matching the driver: block, volumeMountGroup,
+  # snapshotDataSource, groupSnapshot, pvcDataSource (cloning is rejected in
+  # CreateVolume), multipods, RWX, capReadOnlyMany, controllerExpansion,
+  # nodeExpansion, capacity, readWriteOncePod (only ReadWriteOnce is accepted),
+  # multiplePVsSameID and topology.
   Capabilities:
     persistence: true
+    fsGroup: true
+    exec: true
     singleNodeVolume: true

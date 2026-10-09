@@ -40,7 +40,7 @@ spec:
         - name: csi-provisioner
           image: "{{ .Values.images.csiProvisioner.repository }}:{{ .Values.images.csiProvisioner.tag }}"
           imagePullPolicy: {{ .Values.images.csiProvisioner.pullPolicy }}
-          args: ["--csi-address=$(ADDRESS)", "--leader-election=true", "--http-endpoint=:9809"]
+          args: ["--csi-address=$(ADDRESS)", "--leader-election=true", "--timeout=60s", "--http-endpoint=:9809"]
           securityContext:
             runAsUser: 65532
             runAsGroup: 65532
@@ -252,14 +252,23 @@ spec:
                   fieldPath: status.hostIP
             - name: MOUNTS_DIR
               value: /var/lib/csi-syncthing/mounts
+          # Runs as root with CAP_DAC_OVERRIDE: workload pods write volume data as any
+          # UID, and tearing a replica down requires reading the daemon config and
+          # unlinking files this container neither owns nor can write next to.
+          # Dropping every other capability keeps the container unprivileged --
+          # DAC_OVERRIDE alone grants no way to mount, load kernel modules or
+          # change credentials. Note that uid 0 with no capabilities is strictly
+          # weaker than a matching uid would be, which is why the root user and
+          # this capability are both required.
           securityContext:
-            runAsUser: 1000
-            runAsGroup: 1000
-            runAsNonRoot: true
+            runAsUser: 0
+            runAsGroup: 0
+            runAsNonRoot: false
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
               drop: [ALL]
+              add: [DAC_OVERRIDE]
           volumeMounts:
             - name: volumes
               mountPath: /var/lib/csi-syncthing/volumes

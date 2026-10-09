@@ -11,12 +11,24 @@ IMAGE="csi-driver-syncthing:kubernetes-storage-e2e"
 DRIVER_DIR="${ROOT_DIR}/integration-tests/kubernetes-storage-e2e"
 TMP_DIR=""
 
+# Only test patterns the driver can serve: dynamically provisioned filesystem
+# volumes on the default filesystem, in either the default or the explicit
+# filesystem volume mode. The trailing bracket is required so the pattern does
+# not also match the "(allowExpansion)" variants, which the driver cannot serve
+# because it implements no volume expansion.
+E2E_BASE_FOCUS='External.Storage.*csi.syncthing.io.*Dynamic PV \((default fs|filesystem volmode)\)\]'
+# "should provision storage with any volume data source" needs a CSI driver with
+# inline ephemeral volume support and is the only selected spec upstream leaves
+# unguarded, so it cannot be switched off through testdriver.yaml. It is also
+# labelled [Serial], which means a failure aborts every remaining spec.
+E2E_SKIP='\[Feature:|\[Disruptive\]|should provision storage with any volume data source'
+
 case "$SUITE" in
   focused)
-    E2E_FOCUS='External.Storage.*csi.syncthing.io.*volumes should store data'
+    E2E_FOCUS="${E2E_BASE_FOCUS}.*volumes should store data"
     ;;
   full)
-    E2E_FOCUS='External.Storage.*csi.syncthing.io'
+    E2E_FOCUS="$E2E_BASE_FOCUS"
     ;;
   *)
     echo "Unsupported Kubernetes storage e2e suite: $SUITE (expected focused or full)" >&2
@@ -97,7 +109,7 @@ kubectl rollout status deployment/csi-driver-syncthing-csi-controller -n csi-syn
   --provider=skeleton \
   --kubeconfig="${KUBECONFIG:-${HOME}/.kube/config}" \
   --ginkgo.focus="$E2E_FOCUS" \
-  --ginkgo.skip='\[Feature:|\[Disruptive\]' \
+  --ginkgo.skip="$E2E_SKIP" \
   --disable-log-dump \
   --report-dir="$ARTIFACTS_DIR" \
   --report-prefix=csi-storage- \

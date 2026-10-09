@@ -3,7 +3,6 @@ package csi
 import (
 	"context"
 	"errors"
-	"sync"
 	"testing"
 	"time"
 
@@ -165,11 +164,11 @@ func TestControllerPublishUpdatesOnlyVolumeSpec(t *testing.T) {
 
 // finalizerOnDeleteClient mimics the volume-protection finalizer: a deleted
 // SyncthingVolume stays visible with a deletion timestamp until the replica
-// teardown completes, and only then disappears.
+// teardown completes, and only then disappears. Teardown is held back until the
+// test closes releases, so a caller that waits for it blocks indefinitely.
 type finalizerOnDeleteClient struct {
 	client.Client
 	releases chan struct{}
-	once     sync.Once
 }
 
 func (c *finalizerOnDeleteClient) Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
@@ -178,6 +177,7 @@ func (c *finalizerOnDeleteClient) Delete(ctx context.Context, obj client.Object,
 	}
 	name := obj.GetName()
 	go func() {
+		<-c.releases
 		for {
 			current := &storagev1alpha1.SyncthingVolume{}
 			if err := c.Client.Get(ctx, types.NamespacedName{Name: name}, current); err != nil {
@@ -185,8 +185,8 @@ func (c *finalizerOnDeleteClient) Delete(ctx context.Context, obj client.Object,
 			}
 			if !current.DeletionTimestamp.IsZero() && len(current.Status.Replicas) == 0 {
 				current.Finalizers = nil
-				if err := c.Client.Update(ctx, current); err == nil {
-					c.once.Do(func() { close(c.releases) })
+				if err := c.Client.Update(ctx, current); err != nil {
+					return
 				}
 				return
 			}
@@ -200,7 +200,12 @@ func (c *finalizerOnDeleteClient) Delete(ctx context.Context, obj client.Object,
 	return nil
 }
 
-func TestDeleteVolumeWaitsForReplicaTeardown(t *testing.T) {
+// TestDeleteVolumeStartsTeardownWithoutBlocking pins the two properties the
+// upstream sidecars depend on: a single call reports success, and it returns
+// before the asynchronous replica teardown has finished. csi-provisioner caps
+// every CSI request at --timeout seconds, so a DeleteVolume that waited for the
+// finalizer could never complete.
+func TestDeleteVolumeStartsTeardownWithoutBlocking(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := storagev1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
@@ -220,50 +225,75 @@ func TestDeleteVolumeWaitsForReplicaTeardown(t *testing.T) {
 		},
 	}
 	base := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(volume).WithObjects(volume).Build()
+	// The teardown only completes once releases is closed, so any wait inside
+	// DeleteVolume would block for the whole test.
 	teardown := &finalizerOnDeleteClient{Client: base, releases: make(chan struct{})}
-	controller := &Controller{Client: teardown, Reader: base, Poll: time.Millisecond, DeleteTimeout: 10 * time.Second}
+	controller := &Controller{Client: teardown, Reader: base, Poll: time.Millisecond}
 
-	// The sanity suite and external-provisioner both expect a single DeleteVolume
-	// call to report success. It must therefore block until the finalizer is
-	// released rather than returning Aborted while teardown is pending.
-	if _, err := controller.DeleteVolume(context.Background(), &csi.DeleteVolumeRequest{VolumeId: "volume"}); err != nil {
-		t.Fatalf("DeleteVolume error = %v, want success after replica teardown", err)
+	done := make(chan error, 1)
+	go func() {
+		_, err := controller.DeleteVolume(context.Background(), &csi.DeleteVolumeRequest{VolumeId: "volume"})
+		done <- err
+	}()
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("DeleteVolume blocked on the asynchronous replica teardown")
+	}
+	if err != nil {
+		t.Fatalf("DeleteVolume error = %v, want success", err)
 	}
 
 	got := &storagev1alpha1.SyncthingVolume{}
-	if err := base.Get(context.Background(), types.NamespacedName{Name: "volume"}, got); !apierrors.IsNotFound(err) {
-		t.Fatalf("SyncthingVolume still present after DeleteVolume: %v", err)
+	if err := base.Get(context.Background(), types.NamespacedName{Name: "volume"}, got); err != nil {
+		t.Fatalf("get SyncthingVolume: %v", err)
 	}
-
-	// Idempotency: a repeated call on an already deleted volume still succeeds.
-	if _, err := controller.DeleteVolume(context.Background(), &csi.DeleteVolumeRequest{VolumeId: "volume"}); err != nil {
-		t.Fatalf("repeated DeleteVolume error = %v, want success", err)
+	if got.DeletionTimestamp.IsZero() {
+		t.Fatal("SyncthingVolume was not marked for deletion")
 	}
+	if len(got.Spec.DesiredReplicas) != 0 {
+		t.Fatalf("desired replicas = %v, want detached", got.Spec.DesiredReplicas)
+	}
+	close(teardown.releases)
 }
 
-func TestDeleteVolumeReportsAbortedWhenTeardownStalls(t *testing.T) {
+// TestDeleteVolumeIsIdempotentWhileTeardownIsPending covers the retry path.
+// Once the object carries a deletion timestamp the call must report success
+// again rather than Aborted, otherwise csi-provisioner raises
+// VolumeFailedDelete and backs off exponentially instead of converging.
+func TestDeleteVolumeIsIdempotentWhileTeardownIsPending(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := storagev1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
+	now := metav1.Now()
 	volume := &storagev1alpha1.SyncthingVolume{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:       "volume",
-			Finalizers: []string{storagev1alpha1.VolumeProtectionFinalizer},
+			Name:              "volume",
+			Finalizers:        []string{storagev1alpha1.VolumeProtectionFinalizer},
+			DeletionTimestamp: &now,
 		},
 		Spec: storagev1alpha1.SyncthingVolumeSpec{
 			VolumeHandle: "volume", FolderID: "volume",
-			InitialSync:     storagev1alpha1.InitialSyncPolicy{Policy: "none"},
-			DesiredReplicas: []storagev1alpha1.DesiredReplica{{NodeName: "worker-a", Mode: "active"}},
+			InitialSync: storagev1alpha1.InitialSyncPolicy{Policy: "none"},
+		},
+		Status: storagev1alpha1.SyncthingVolumeStatus{
+			Replicas: []storagev1alpha1.ReplicaStatus{{NodeName: "worker-a", State: "Ready"}},
 		},
 	}
 	base := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(volume).WithObjects(volume).Build()
-	// No teardown runs, so the finalizer is never released and the wait must end.
-	controller := &Controller{Client: base, Reader: base, Poll: time.Millisecond, DeleteTimeout: 50 * time.Millisecond}
+	// The finalizer is never released, so the volume stays pending forever.
+	controller := &Controller{Client: base, Reader: base, Poll: time.Millisecond}
 
-	_, err := controller.DeleteVolume(context.Background(), &csi.DeleteVolumeRequest{VolumeId: "volume"})
-	if status.Code(err) != codes.Aborted {
-		t.Fatalf("DeleteVolume error = %v, want Aborted when teardown stalls", err)
+	for attempt := 1; attempt <= 3; attempt++ {
+		if _, err := controller.DeleteVolume(context.Background(), &csi.DeleteVolumeRequest{VolumeId: "volume"}); err != nil {
+			t.Fatalf("DeleteVolume attempt %d error = %v, want success while teardown is pending", attempt, err)
+		}
+	}
+
+	if err := base.Get(context.Background(), types.NamespacedName{Name: "volume"}, &storagev1alpha1.SyncthingVolume{}); err != nil {
+		t.Fatalf("SyncthingVolume disappeared while its teardown was still pending: %v", err)
 	}
 }
 

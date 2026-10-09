@@ -10,7 +10,7 @@ KIND_NODE_IMAGE ?= kindest/node:$(KUBERNETES_VERSION)
 CSI_STORAGE_E2E_ARTIFACTS ?= artifacts/kubernetes-storage-e2e
 CSI_STORAGE_E2E_FULL_ARTIFACTS ?= artifacts/kubernetes-storage-e2e-full
 
-.PHONY: deps fmt test docker-build docker-push helm-upgrade-install csi-sanity csi-sanity-clean kubernetes-storage-e2e kubernetes-storage-e2e-full kubernetes-storage-e2e-clean
+.PHONY: deps fmt test docker-build docker-push helm-upgrade-install csi-sanity csi-sanity-clean kubernetes-storage-e2e kubernetes-storage-e2e-focused kubernetes-storage-e2e-full kubernetes-storage-e2e-clean
 
 deps:
 	go mod tidy
@@ -37,6 +37,9 @@ csi-sanity-clean:
 	kind delete cluster --name $(KIND_CLUSTER_NAME)
 
 kubernetes-storage-e2e:
+	KIND_CLUSTER_NAME=$(KUBERNETES_STORAGE_E2E_CLUSTER_NAME) KUBERNETES_VERSION=$(KUBERNETES_VERSION) KIND_NODE_IMAGE=$(KIND_NODE_IMAGE) CSI_STORAGE_E2E_ARTIFACTS=$(CSI_STORAGE_E2E_FULL_ARTIFACTS) KUBERNETES_STORAGE_E2E_SUITE=full bash ./integration-tests/kubernetes-storage-e2e/run.sh
+
+kubernetes-storage-e2e-focused:
 	KIND_CLUSTER_NAME=$(KUBERNETES_STORAGE_E2E_CLUSTER_NAME) KUBERNETES_VERSION=$(KUBERNETES_VERSION) KIND_NODE_IMAGE=$(KIND_NODE_IMAGE) CSI_STORAGE_E2E_ARTIFACTS=$(CSI_STORAGE_E2E_ARTIFACTS) bash ./integration-tests/kubernetes-storage-e2e/run.sh
 
 kubernetes-storage-e2e-full:
