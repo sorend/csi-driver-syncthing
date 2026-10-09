@@ -67,14 +67,20 @@ func main() {
 	}
 	signalContext := ctrl.SetupSignalHandler()
 	go func() {
-		if err := csiserver.Serve(signalContext, controllerEndpoint, func(server *grpc.Server) {
+		err := csiserver.Serve(signalContext, controllerEndpoint, func(server *grpc.Server) {
 			csiapi.RegisterControllerServer(server, &csiserver.Controller{Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Poll: 2 * time.Second})
-		}); err != nil {
-			if signalContext.Err() != nil {
-				return
-			}
-			os.Exit(1)
+		})
+		if signalContext.Err() != nil {
+			return
 		}
+		// Serve returned while the manager is still running, so the driver no
+		// longer has a CSI endpoint. The health probes only cover the manager and
+		// would keep passing, which leaves the pod looking healthy while every
+		// CSI call fails to connect. Exit instead and let the kubelet restart it.
+		if err != nil {
+			ctrl.Log.Error(err, "CSI gRPC server stopped")
+		}
+		os.Exit(1)
 	}()
 	if err := mgr.Start(signalContext); err != nil {
 		os.Exit(1)

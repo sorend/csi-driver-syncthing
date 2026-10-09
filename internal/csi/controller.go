@@ -321,7 +321,17 @@ func (s *Controller) ControllerUnpublishVolume(ctx context.Context, req *csi.Con
 		return nil, status.Errorf(codes.Internal, "get SyncthingVolume: %v", err)
 	}
 	if !volume.DeletionTimestamp.IsZero() {
-		changed, err := s.updateVolume(ctx, req.GetVolumeId(), func(current *storagev1alpha1.SyncthingVolume) (bool, error) {
+		// The volume is already going away, so detaching is under way no matter
+		// what this call does: DeleteVolume has cleared the desired replicas and
+		// the volume-protection finalizer keeps the object alive until every node
+		// agent reports its replica Absent.
+		//
+		// Reporting Aborted until the replica turns Absent would break the CSI
+		// requirement that this call is idempotent. Callers such as the CSI
+		// sanity suite invoke it exactly once and treat any error as fatal, so
+		// there would be no retry to converge on: the deletion would never be
+		// allowed to finish.
+		if _, err := s.updateVolume(ctx, req.GetVolumeId(), func(current *storagev1alpha1.SyncthingVolume) (bool, error) {
 			if current.DeletionTimestamp.IsZero() {
 				return false, nil
 			}
@@ -332,21 +342,8 @@ func (s *Controller) ControllerUnpublishVolume(ctx context.Context, req *csi.Con
 				}
 			}
 			return false, nil
-		})
-		if err != nil {
-			return nil, status.Errorf(codes.Aborted, "remove deleting volume replica: %v", err)
-		}
-		if changed {
-			return nil, status.Error(codes.Aborted, "waiting for deleting volume replica removal")
-		}
-		volume, err = s.getVolume(ctx, req.GetVolumeId())
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "read deleting volume: %v", err)
-		}
-		for _, replica := range volume.Status.Replicas {
-			if replica.NodeName == req.GetNodeId() && replica.State != "Absent" {
-				return nil, status.Error(codes.Aborted, "waiting for deleting volume replica removal")
-			}
+		}); err != nil && !apierrors.IsNotFound(err) {
+			return nil, status.Errorf(codes.Internal, "remove deleting volume replica: %v", err)
 		}
 		return &csi.ControllerUnpublishVolumeResponse{}, nil
 	}

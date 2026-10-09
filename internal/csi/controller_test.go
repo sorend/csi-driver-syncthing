@@ -308,6 +308,58 @@ func TestDeleteVolumeSucceedsForUnknownVolume(t *testing.T) {
 	}
 }
 
+// TestControllerUnpublishVolumeSucceedsWhileVolumeIsBeingDeleted pins that a
+// single call reports success even when the replica has not turned Absent yet.
+// DeleteVolume returns as soon as the deletion is under way, so the volume is
+// normally already marked for deletion by the time the caller detaches it, and
+// callers such as the CSI sanity suite invoke this exactly once and treat any
+// error as fatal. Answering Aborted would leave the deletion unable to finish.
+func TestControllerUnpublishVolumeSucceedsWhileVolumeIsBeingDeleted(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := storagev1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	now := metav1.Now()
+	volume := &storagev1alpha1.SyncthingVolume{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "volume",
+			Finalizers:        []string{storagev1alpha1.VolumeProtectionFinalizer},
+			DeletionTimestamp: &now,
+		},
+		Spec: storagev1alpha1.SyncthingVolumeSpec{
+			VolumeHandle: "volume", FolderID: "volume",
+			InitialSync: storagev1alpha1.InitialSyncPolicy{Policy: "none"},
+			DesiredReplicas: []storagev1alpha1.DesiredReplica{
+				{NodeName: "worker-a", Mode: "active"},
+				{NodeName: "worker-b", Mode: "active"},
+			},
+		},
+		// The replica is still Ready: the node agent has not torn it down yet,
+		// and the finalizer below is never released, so this state is final.
+		Status: storagev1alpha1.SyncthingVolumeStatus{
+			Replicas: []storagev1alpha1.ReplicaStatus{{NodeName: "worker-a", State: "Ready"}},
+		},
+	}
+	base := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(volume).WithObjects(volume).Build()
+	controller := &Controller{Client: base, Reader: base, Poll: time.Millisecond}
+
+	request := &csi.ControllerUnpublishVolumeRequest{VolumeId: "volume", NodeId: "worker-a"}
+	// Repeated calls must keep reporting success, not just the first one.
+	for attempt := 1; attempt <= 3; attempt++ {
+		if _, err := controller.ControllerUnpublishVolume(context.Background(), request); err != nil {
+			t.Fatalf("ControllerUnpublishVolume attempt %d error = %v, want success while the volume is being deleted", attempt, err)
+		}
+	}
+
+	got := &storagev1alpha1.SyncthingVolume{}
+	if err := base.Get(context.Background(), types.NamespacedName{Name: "volume"}, got); err != nil {
+		t.Fatalf("get SyncthingVolume: %v", err)
+	}
+	if len(got.Spec.DesiredReplicas) != 1 || got.Spec.DesiredReplicas[0].NodeName != "worker-b" {
+		t.Fatalf("desired replicas = %v, want only worker-b detached", got.Spec.DesiredReplicas)
+	}
+}
+
 type conflictOnceClient struct {
 	client.Client
 	conflict bool
