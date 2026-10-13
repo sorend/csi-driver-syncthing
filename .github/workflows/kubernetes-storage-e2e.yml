@@ -23,7 +23,7 @@ jobs:
         uses: azure/setup-helm@v4
 
       - name: Set up kubectl
-        uses: azure/setup-kubectl@v4
+        uses: azure/setup-kubectl@v5
 
       - name: Install Kind
         uses: helm/kind-action@v1.12.0
