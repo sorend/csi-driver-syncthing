@@ -36,7 +36,7 @@ jobs:
 
       - name: Upload e2e reports and cluster diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: kubernetes-storage-e2e-focused-artifacts
           path: artifacts/kubernetes-storage-e2e/
